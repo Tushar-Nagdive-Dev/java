@@ -1,0 +1,15 @@
+# IDE
+.idea
+
+# Ignore Gradle project-specific cache directory
+build-tools/gradleBT/Phase01/.gradle
+build-tools/gradleBT/Phase03/.gradle
+
+# Ignore Gradle build output directory
+build-tools/gradleBT/Phase01/build
+build-tools/gradleBT/Phase03/build
+build-tools/gradleBT/Phase03/.env
+build-tools/gradleBT/Phase03/.env.test
+build-tools/gradleBT/Phase03/common/build
+build-tools/gradleBT/Phase03/service-api/build
+build-tools/gradleBT/Phase03/service-core/build
