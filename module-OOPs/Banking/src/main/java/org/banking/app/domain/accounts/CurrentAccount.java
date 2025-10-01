@@ -20,7 +20,7 @@ public final class CurrentAccount extends Account {
         Money projected = balance().subtract(amount);
         BigDecimal floor = OVERDRAFT_LIMIT.asBigDecimal().negate();
         if (projected.asBigDecimal().compareTo(floor) < 0) {
-            throw new RuntimeException("Overdraft limit exceeded");
+            throw new InsufficientBalanceException("Overdraft limit exceeded");
         }
     }
 }

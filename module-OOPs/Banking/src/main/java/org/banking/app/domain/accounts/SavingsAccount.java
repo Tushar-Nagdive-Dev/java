@@ -19,7 +19,7 @@ public final class SavingsAccount extends Account {
         // After withdrawal, balance must remain >= MIN_BALANCE
         Money projected = balance().subtract(amount);
         if (projected.asBigDecimal().compareTo(MIN_BALANCE.asBigDecimal()) < 0) {
-            throw new RuntimeException("Savings min balance would be violated");
+            throw new InsufficientBalanceException("Savings min balance would be violated");
         }
     }
 }
