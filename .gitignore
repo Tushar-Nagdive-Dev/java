@@ -1,5 +1,7 @@
 # IDE
 .idea
+.vscode
+*bin
 
 # Ignore Gradle project-specific cache directory
 build-tools/gradleBT/Phase01/.gradle
@@ -13,3 +15,10 @@ build-tools/gradleBT/Phase03/.env.test
 build-tools/gradleBT/Phase03/common/build
 build-tools/gradleBT/Phase03/service-api/build
 build-tools/gradleBT/Phase03/service-core/build
+
+# Ignore module-OOPs not required
+module-OOPs/interest/build
+module-OOPs/interest/.gradle
+module-OOPs/interest/gradle
+module-OOPs/interest/gradlew.bat
+module-OOPs/interest/gradlew
