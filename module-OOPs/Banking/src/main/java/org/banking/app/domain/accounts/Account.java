@@ -22,6 +22,15 @@ public abstract class Account {
         this.type = type;
         this.balance = openingBalance;
         record(Transaction.credit(openingBalance, "Opening balance"));
+
+        // Record an opening ledger entry that matches the sign of the balance.
+        if (openingBalance.asBigDecimal().signum() > 0) {
+            record(Transaction.credit(openingBalance, "Opening balance"));
+        } else if (openingBalance.isNegative()) {
+            // record a DEBIT of the magnitude when opening balance is negative
+            record(Transaction.debit(openingBalance.abs(), "Opening overdraft"));
+        }
+        // if zero, record nothing
     }
 
     /** Template method: concrete types enforce withdrawal policy. */
@@ -35,11 +44,21 @@ public abstract class Account {
 
     public final void withdraw(Money amount, String note) {
         if (amount == null) throw new IllegalArgumentException("amount null");
-        validateWithdrawal(amount);                 // polymorphic rule
+        // optional but recommended: prevent zero/negative withdrawal requests
+        if (amount.asBigDecimal().signum() <= 0) {
+            throw new IllegalArgumentException("amount must be positive");
+        }
+
+        // 1) Delegate policy to subtype (min-balance or overdraft checks live here)
+        validateWithdrawal(amount);
+
+        // 2) Apply the mutation (policy already guaranteed legality)
         this.balance = this.balance.subtract(amount);
-        if (this.balance.isNegative()) throw new RuntimeException("Insufficient funds");
+
+        // 3) Record the ledger entry
         record(Transaction.debit(amount, note));
     }
+
 
     protected void record(Transaction t) { ledger.add(t); }
 

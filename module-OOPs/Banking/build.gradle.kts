@@ -1,9 +1,14 @@
 plugins {
     id("java")
+    application
 }
 
 group = "org.banking"
 version = "1.0.0"
+
+application {
+    mainClass.set("org.banking.app.BankingApplication")
+}
 
 repositories {
     mavenCentral()
@@ -25,9 +30,10 @@ dependencies {
     testImplementation("org.mockito:mockito-core:5.14.1")
 }
 
-tasks.test {
-    useJUnitPlatform() // Required to run JUnit 5
+tasks.withType<Test> {
+    useJUnitPlatform()
     testLogging {
         events("PASSED", "FAILED", "SKIPPED")
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
     }
 }

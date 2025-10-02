@@ -25,6 +25,10 @@ public class Money {
         return new Money(BigDecimal.ZERO);
     }
 
+    public Money abs() {
+        return Money.of(this.amount.abs());
+    }
+
     /** Multiplies by a decimal percentage, e.g., interestRate=0.045 for 4.5%. */
     public Money pct(BigDecimal rate) {
         return of(this.amount.multiply(rate));
