@@ -15,7 +15,5 @@ public class InterestCalculateApplication {
         String output = engine.report(Money.of(new BigDecimal("100000")), 12); // ₹1,00,000 for 12 months
         System.out.println(output);
 
-        List<String> items = Arrays.asList("apple", "banana");
-
     }
 }
