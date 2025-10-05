@@ -32,3 +32,10 @@ module-OOPs/Employee8/gradle
 module-OOPs/Employee8/gradlew.bat
 module-OOPs/Employee8/gradlew
 module-OOPs/Employee8/build
+
+# Ignore module-JCF not required
+module-JCF/SmartMart/gradlew
+module-JCF/SmartMart/gradle
+module-JCF/SmartMart/gradlew.bat
+module-JCF/SmartMart/.gradle
+module-JCF/SmartMart/build
