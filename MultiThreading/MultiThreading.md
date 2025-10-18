@@ -1,0 +1,696 @@
+## 🔥 Multithreading & Concurrency Mastery Roadmap
+
+### **1. Core Thread Concepts**
+
+* Thread lifecycle, states, daemon vs user threads
+* Thread creation: `Thread`, `Runnable`, `Callable`, `Future`
+* Real-world example: Background email-sending worker
+
+### **2. Synchronization & Thread Safety**
+
+* `synchronized`, `volatile`, intrinsic vs explicit locks
+* ReentrantLock, ReadWriteLock, Condition variables
+* Atomic classes (`AtomicInteger`, `AtomicReference`, etc.)
+* Real-world example: Concurrent balance update in banking
+
+### **3. Executor Framework**
+
+* `ExecutorService`, `ThreadPoolExecutor`, `ScheduledExecutorService`
+* Core pool sizing, queue types, thread factory customization
+* Practical: Request processing service for SmartMart
+
+### **4. ForkJoin Framework**
+
+* Work stealing, RecursiveTask, RecursiveAction
+* Real-world example: Parallel computation engine
+
+### **5. CompletableFuture & Parallel Streams**
+
+* Async pipelines, chaining, combining futures
+* Exception handling in async workflows
+* Real-world example: Price aggregation from multiple APIs
+
+### **6. Concurrency Utilities**
+
+* `CountDownLatch`, `CyclicBarrier`, `Semaphore`, `Exchanger`, `Phaser`
+* Real-world example: Parallel data loader coordination
+
+### **7. Advanced Topics**
+
+* Thread dumps, deadlock detection, profiling concurrency
+* Reactive vs multithreaded paradigms (intro to Reactor/Project Loom)
+
+---
+
+## 🧠 **1. What Is a Thread (in Real Terms)?**
+
+A **thread** is the smallest independent unit of execution within a program.
+It’s like a **worker** inside your process — sharing the same memory but doing tasks independently.
+
+💡 **Analogy:**
+Imagine your Spring Boot service as a restaurant 🏢.
+
+* The **process** = the restaurant itself (with shared kitchen, tables, and stock).
+* Each **thread** = a waiter serving one customer independently.
+  They all share the same space but handle different requests simultaneously.
+
+---
+
+## ⚙️ **2. Process vs Thread**
+
+| Concept            | Process                                 | Thread                                      |
+| ------------------ | --------------------------------------- | ------------------------------------------- |
+| **Memory**         | Has its own memory                      | Shares memory with other threads            |
+| **Communication**  | Inter-Process Communication (slow)      | Shared memory (fast, but risk of conflicts) |
+| **Failure Impact** | One process crash doesn’t affect others | One bad thread can crash the process        |
+| **Example**        | Chrome tabs (each tab = process)        | Each tab’s background scripts = threads     |
+
+---
+
+## 🧩 **3. Thread Lifecycle (States in JVM)**
+
+A thread goes through **5 states** during its lifecycle:
+
+| State                 | Description                    | Trigger                                 |
+| --------------------- | ------------------------------ | --------------------------------------- |
+| **NEW**               | Thread created but not started | `new Thread()`                          |
+| **RUNNABLE**          | Ready to run or running        | `thread.start()`                        |
+| **BLOCKED / WAITING** | Waiting for lock/resource      | `wait()`, `sleep()`, or lock contention |
+| **TIMED_WAITING**     | Waiting with timeout           | `sleep(1000)`, `wait(5000)`             |
+| **TERMINATED**        | Execution completed            | Thread finishes `run()`                 |
+
+🧩 **Visual Flow:**
+
+```
+NEW → RUNNABLE → WAITING/BLOCKED → RUNNABLE → TERMINATED
+```
+
+---
+
+## 🔨 **4. Creating Threads (3 Primary Ways)**
+
+### ✅ **1. Extending `Thread` class**
+
+```java
+class EmailThread extends Thread {
+    @Override
+    public void run() {
+        System.out.println("Sending email in thread: " + Thread.currentThread().getName());
+    }
+}
+
+public class ThreadExample1 {
+    public static void main(String[] args) {
+        EmailThread emailThread = new EmailThread();
+        emailThread.start();  // start() → creates a new call stack
+    }
+}
+```
+
+🧩 **Key Points:**
+
+* `start()` creates a new thread and calls `run()` internally.
+* If you call `run()` directly → it runs in the **main thread** (no concurrency).
+
+---
+
+### ✅ **2. Implementing `Runnable` Interface**
+
+```java
+class EmailTask implements Runnable {
+    @Override
+    public void run() {
+        System.out.println("Processing email in: " + Thread.currentThread().getName());
+    }
+}
+
+public class ThreadExample2 {
+    public static void main(String[] args) {
+        Thread thread = new Thread(new EmailTask());
+        thread.start();
+    }
+}
+```
+
+🧩 **Advantages:**
+
+* Better for **reusability** and **inheritance** (since you’re not forced to extend Thread).
+* Often used in **ExecutorService**.
+
+---
+
+### ✅ **3. Using `Callable` with `Future` (Return Value + Exception Handling)**
+
+`Runnable` can’t return results or throw checked exceptions.
+`Callable<V>` can — it returns a value and can throw exceptions.
+
+```java
+import java.util.concurrent.*;
+
+public class ThreadExample3 {
+    public static void main(String[] args) throws Exception {
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+
+        Callable<String> task = () -> {
+            Thread.sleep(1000);
+            return "Email sent successfully by " + Thread.currentThread().getName();
+        };
+
+        Future<String> result = executor.submit(task);
+
+        System.out.println("Main thread doing other work...");
+        System.out.println("Result: " + result.get()); // blocks until result is ready
+
+        executor.shutdown();
+    }
+}
+```
+
+🧩 **Key Points:**
+
+* `submit()` accepts a `Callable` or `Runnable`.
+* `Future.get()` blocks until the task completes.
+* Used in enterprise async workflows (e.g., background data fetchers).
+
+---
+
+## 🧠 **5. Runnable vs Callable vs Future**
+
+| Feature      | Runnable               | Callable                | Future                |
+| ------------ | ---------------------- | ----------------------- | --------------------- |
+| Return value | ❌ No                   | ✅ Yes                   | ✅ Holds result        |
+| Exception    | ❌ Unchecked only       | ✅ Checked allowed       | ✅ Can get via `get()` |
+| Used with    | Thread / Executor      | ExecutorService         | ExecutorService       |
+| Example use  | Logging, notifications | Computations, API calls | Manage results        |
+
+---
+
+## 💼 **6. Real-World Example (E-commerce Order Processing)**
+
+Imagine SmartMart processes an order:
+
+1. One thread verifies stock.
+2. Another thread handles payment.
+3. Another sends the confirmation email.
+
+These run **concurrently** for better throughput.
+
+```java
+ExecutorService pool = Executors.newFixedThreadPool(3);
+
+Callable<Boolean> stockTask = () -> { /* check stock */ return true; };
+Callable<Boolean> paymentTask = () -> { /* process payment */ return true; };
+Callable<String> emailTask = () -> { /* send email */ return "Email sent"; };
+
+Future<Boolean> stock = pool.submit(stockTask);
+Future<Boolean> payment = pool.submit(paymentTask);
+Future<String> email = pool.submit(emailTask);
+
+if (stock.get() && payment.get()) {
+    System.out.println(email.get());
+}
+
+pool.shutdown();
+```
+
+👉 This is the **foundation** of async workflows in backend systems — later, you’ll see how this pattern evolves into **CompletableFuture** and **Reactive APIs**.
+
+---
+
+## ⚡ Common Mistakes to Avoid
+
+* ❌ Calling `run()` directly (no concurrency)
+* ❌ Forgetting `executor.shutdown()`
+* ❌ Using too many threads manually (risk: OOM or CPU starvation)
+* ❌ Ignoring exceptions in background threads (use try-catch inside `run()`)
+
+---
+
+## ✅ **Next Lesson: Synchronization & Thread Safety**
+
+We’ll go deep into:
+
+* Race conditions
+* `synchronized`, `volatile`
+* `ReentrantLock`, `ReadWriteLock`
+* Atomic variables
+* Real-world: concurrent balance update in a banking app
+
+---
+
+## 💼 Mini Project: **BankX — Concurrent Transaction Processor**
+
+### 🧠 Scenario
+
+You’re designing **BankX**, a lightweight system where multiple customers deposit and withdraw money *simultaneously*.
+We’ll simulate concurrent transactions using:
+
+* Multiple **threads** for users performing deposits/withdrawals
+* A shared **account balance**
+* `Runnable` and `Callable` tasks to show both **fire-and-forget** and **result-based** concurrency.
+
+This will naturally prepare us for our **next lesson** on synchronization and thread safety — because this project will deliberately cause a **race condition** that we’ll fix later. 💥
+
+---
+
+## 🧩 Step 1: Project Setup
+
+Package:
+
+```
+com.bankx.concurrent
+```
+
+File:
+
+```
+BankTransactionSimulator.java
+```
+
+---
+
+## 🧮 Step 2: Code Implementation
+
+```java
+package com.bankx.concurrent;
+
+import java.util.concurrent.*;
+
+public class BankTransactionSimulator {
+
+    // Shared bank account balance
+    private static double accountBalance = 1000.0;
+
+    public static void main(String[] args) throws Exception {
+
+        System.out.println("🏦 Initial Balance: " + accountBalance);
+
+        ExecutorService executor = Executors.newFixedThreadPool(4);
+
+        // Runnable: deposit money (fire and forget)
+        Runnable depositTask = () -> {
+            for (int i = 0; i < 3; i++) {
+                double amount = 100.0;
+                accountBalance += amount;
+                System.out.println(Thread.currentThread().getName() + " deposited ₹" + amount +
+                                   " → New Balance: " + accountBalance);
+                try { Thread.sleep(500); } catch (InterruptedException ignored) {}
+            }
+        };
+
+        // Runnable: withdraw money (fire and forget)
+        Runnable withdrawTask = () -> {
+            for (int i = 0; i < 3; i++) {
+                double amount = 80.0;
+                accountBalance -= amount;
+                System.out.println(Thread.currentThread().getName() + " withdrew ₹" + amount +
+                                   " → New Balance: " + accountBalance);
+                try { Thread.sleep(400); } catch (InterruptedException ignored) {}
+            }
+        };
+
+        // Callable: check final balance (returns result)
+        Callable<Double> balanceCheckTask = () -> {
+            Thread.sleep(1500);
+            return accountBalance;
+        };
+
+        // Submit tasks
+        executor.submit(depositTask);
+        executor.submit(depositTask);
+        executor.submit(withdrawTask);
+        Future<Double> futureBalance = executor.submit(balanceCheckTask);
+
+        System.out.println("🔁 Processing transactions concurrently...");
+
+        // Get result from Callable
+        Double finalBalance = futureBalance.get();
+        System.out.println("💰 Final Balance (might be incorrect): ₹" + finalBalance);
+
+        executor.shutdown();
+        System.out.println("✅ All transactions completed.");
+    }
+}
+```
+
+---
+
+### 🧠 **Expected Sample Output**
+
+(You’ll see interleaving depending on CPU scheduling)
+
+```
+🏦 Initial Balance: 1000.0
+🔁 Processing transactions concurrently...
+pool-1-thread-1 deposited ₹100.0 → New Balance: 1100.0
+pool-1-thread-2 withdrew ₹80.0 → New Balance: 1020.0
+pool-1-thread-3 deposited ₹100.0 → New Balance: 1120.0
+pool-1-thread-1 withdrew ₹80.0 → New Balance: 1040.0
+pool-1-thread-2 deposited ₹100.0 → New Balance: 1140.0
+pool-1-thread-3 withdrew ₹80.0 → New Balance: 1060.0
+💰 Final Balance (might be incorrect): ₹1060.0
+✅ All transactions completed.
+```
+
+⚠️ **But wait — sometimes the final balance won’t match the expected result!**
+That’s because multiple threads are modifying `accountBalance` **without synchronization** → a **race condition** occurs. 🧨
+
+And *that’s* exactly what we’ll fix in the next lesson.
+
+---
+
+### 🧠 Key Takeaways from This Exercise
+
+| Concept                  | Explanation                                                                                       |
+| ------------------------ | ------------------------------------------------------------------------------------------------- |
+| **Shared Resource**      | `accountBalance` is accessed by multiple threads — unsafe.                                        |
+| **Race Condition**       | Two threads update the same variable simultaneously — last one wins.                              |
+| **Runnable vs Callable** | Deposits/withdrawals = `Runnable` (fire-and-forget), balance check = `Callable` (returns result). |
+| **ExecutorService**      | Manages thread lifecycle efficiently — real enterprise pattern.                                   |
+| **Problem Preview**      | Thread safety & synchronization required to ensure consistency.                                   |
+
+---
+
+### 💪 Optional Challenge
+
+Add 5 more customers and introduce random transaction amounts using:
+
+```java
+ThreadLocalRandom.current().nextDouble(50, 150);
+```
+
+Then run it multiple times — you’ll *see different results every time!*
+That’s non-deterministic thread behavior — perfect setup for synchronization.
+
+---
+
+# Lesson 2 — Synchronization & Thread Safety (BankX)
+
+## 0) Why the previous code was unsafe
+
+`accountBalance += amount;` is **not atomic**. It’s at least three steps (read → add → write). Two threads interleave and **lose updates**.
+
+> Key rule: If multiple threads read/write the **same mutable state**, you need **coordination** (locks/atomics).
+
+---
+
+## 1) `synchronized`: the simplest, correct first step
+
+### 1.1 Intrinsic lock on the account object
+
+Create a **thread-safe** `BankAccount` and use **BigDecimal** for money (never `double` for real currency).
+
+```java
+package com.bankx.concurrent;
+
+import java.math.BigDecimal;
+
+public class BankAccount {
+    private BigDecimal balance = new BigDecimal("1000.00");
+
+    // Entire method is synchronized (intrinsic lock = this)
+    public synchronized void deposit(BigDecimal amount) {
+        balance = balance.add(amount);
+    }
+
+    public synchronized void withdraw(BigDecimal amount) {
+        // example business rule
+        if (balance.compareTo(amount) < 0) {
+            throw new IllegalStateException("Insufficient funds");
+        }
+        balance = balance.subtract(amount);
+    }
+
+    public synchronized BigDecimal getBalance() {
+        return balance;
+    }
+}
+```
+
+### 1.2 Using it in the simulator
+
+```java
+ExecutorService pool = Executors.newFixedThreadPool(4);
+BankAccount account = new BankAccount();
+
+Runnable depositor = () -> {
+    for (int i = 0; i < 3; i++) {
+        account.deposit(new BigDecimal("100.00"));
+        System.out.println(Thread.currentThread().getName() + " deposited → " + account.getBalance());
+        sleep(300);
+    }
+};
+
+Runnable withdrawer = () -> {
+    for (int i = 0; i < 3; i++) {
+        try {
+            account.withdraw(new BigDecimal("80.00"));
+            System.out.println(Thread.currentThread().getName() + " withdrew → " + account.getBalance());
+        } catch (Exception e) {
+            System.out.println("Withdraw failed: " + e.getMessage());
+        }
+        sleep(250);
+    }
+};
+
+pool.submit(depositor);
+pool.submit(depositor);
+pool.submit(withdrawer);
+
+pool.shutdown();
+```
+
+**Takeaways**
+
+* `synchronized` ensures **mutual exclusion** and **visibility** (happens-before).
+* It’s **reentrant** (a thread can re-acquire the same lock).
+* Keep critical sections **small** (lock only around shared state).
+
+---
+
+## 2) `synchronized` block for finer granularity
+
+If the method has non-critical work (logging, validation), lock **only** the balance mutation:
+
+```java
+public void deposit(BigDecimal amount) {
+    validate(amount);
+    synchronized (this) {
+        balance = balance.add(amount);
+    }
+    audit("deposit", amount);
+}
+```
+
+---
+
+## 3) `ReentrantLock`: more control than `synchronized`
+
+Use when you need **tryLock**, **timeout**, **fairness**, or **multiple condition variables**.
+
+```java
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.concurrent.locks.Lock;
+
+public class BankAccountLocking {
+    private BigDecimal balance = new BigDecimal("1000.00");
+    private final Lock lock = new ReentrantLock(true); // fair lock
+
+    public void deposit(BigDecimal amount) {
+        lock.lock();
+        try {
+            balance = balance.add(amount);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    public void withdraw(BigDecimal amount) {
+        boolean acquired = false;
+        try {
+            acquired = lock.tryLock(); // or tryLock(500, TimeUnit.MILLISECONDS)
+            if (!acquired) throw new IllegalStateException("System busy, try again");
+            if (balance.compareTo(amount) < 0) {
+                throw new IllegalStateException("Insufficient funds");
+            }
+            balance = balance.subtract(amount);
+        } finally {
+            if (acquired) lock.unlock();
+        }
+    }
+
+    public BigDecimal getBalance() {
+        lock.lock();
+        try { return balance; } finally { lock.unlock(); }
+    }
+}
+```
+
+**When to prefer `ReentrantLock`**
+
+* You need **non-blocking attempts** (`tryLock`).
+* You must avoid **priority inversion** or favor fairness.
+* You need **multiple conditions** (e.g., `notEmpty`, `notFull`).
+
+---
+
+## 4) Read-heavy patterns: `ReadWriteLock`
+
+For scenarios with many readers and few writers:
+
+```java
+import java.util.concurrent.locks.*;
+
+public class BankLedger {
+    private BigDecimal balance = new BigDecimal("1000.00");
+    private final ReadWriteLock rw = new ReentrantReadWriteLock();
+    private final Lock r = rw.readLock();
+    private final Lock w = rw.writeLock();
+
+    public void deposit(BigDecimal amount) { w.lock(); try { balance = balance.add(amount); } finally { w.unlock(); } }
+    public void withdraw(BigDecimal amount) { w.lock(); try { balance = balance.subtract(amount); } finally { w.unlock(); } }
+    public BigDecimal getBalance() { r.lock(); try { return balance; } finally { r.unlock(); } }
+}
+```
+
+---
+
+## 5) Atomics (`Atomic*`, `LongAdder`) — when they fit
+
+* Great for **counters**, **stats**, and **high-contention increments**.
+* Not ideal for **composed operations** (check-then-act) without extra coordination.
+
+```java
+import java.util.concurrent.atomic.AtomicLong;
+
+public class Metrics {
+    private final AtomicLong successfulTx = new AtomicLong();
+    private final AtomicLong failedTx = new AtomicLong();
+
+    public void markSuccess() { successfulTx.incrementAndGet(); }
+    public void markFail() { failedTx.incrementAndGet(); }
+    public long successes() { return successfulTx.get(); }
+}
+```
+
+> For extreme contention, prefer `LongAdder` over `AtomicLong` (better under high write concurrency).
+
+---
+
+## 6) Why `volatile` is **not** a lock
+
+* `volatile` gives **visibility**, not **atomicity**.
+* `volatile int x; x++` is **not safe**.
+* Use it for flags (e.g., `volatile boolean running`) or to publish immutable objects safely.
+
+```java
+private volatile boolean running = true;
+
+public void stop() { running = false; }
+public void loop() {
+  while (running) { /* work */ }
+}
+```
+
+---
+
+## 7) Avoiding deadlocks (must-know for architects)
+
+**Deadlock conditions**: mutual exclusion, hold-and-wait, no preemption, circular wait.
+
+**Prevention strategy (simple & effective):** **Global lock ordering**
+Always acquire locks in the same **global order** across the codebase.
+
+```java
+// Always lock account A before account B if A.id < B.id
+public void transfer(Account from, Account to, BigDecimal amt) {
+    Account first = from.id() < to.id() ? from : to;
+    Account second = from.id() < to.id() ? to : from;
+
+    synchronized (first) {
+        synchronized (second) {
+            from.withdraw(amt);
+            to.deposit(amt);
+        }
+    }
+}
+```
+
+---
+
+## 8) Production checklist (Architect mindset)
+
+* Keep shared state **small** and **well-encapsulated**.
+* Prefer **immutability** wherever possible.
+* Keep lock hold-time **short**; avoid I/O inside locks.
+* Expose **thread-safe APIs**; hide internals.
+* Monitor with **JFR**, **thread dumps**, **metrics** (queue sizes, pool saturation).
+* In Spring, prefer **stateless services** + delegate to **thread-safe repositories/services**.
+
+---
+
+## 9) Upgraded BankX: Thread-safe version (complete)
+
+```java
+package com.bankx.concurrent;
+
+import java.math.BigDecimal;
+import java.util.concurrent.*;
+
+public class BankXApp {
+    public static void main(String[] args) throws Exception {
+        ExecutorService pool = Executors.newFixedThreadPool(6);
+        BankAccount account = new BankAccount(); // synchronized methods
+
+        Runnable depositor = () -> {
+            for (int i = 0; i < 5; i++) {
+                account.deposit(new BigDecimal("100.00"));
+                log("deposit", account.getBalance());
+                sleep(150);
+            }
+        };
+
+        Runnable withdrawer = () -> {
+            for (int i = 0; i < 5; i++) {
+                try {
+                    account.withdraw(new BigDecimal("80.00"));
+                    log("withdraw", account.getBalance());
+                } catch (Exception e) {
+                    System.out.println("Withdraw failed: " + e.getMessage());
+                }
+                sleep(120);
+            }
+        };
+
+        Callable<BigDecimal> balanceCheck = account::getBalance;
+
+        pool.submit(depositor);
+        pool.submit(depositor);
+        pool.submit(withdrawer);
+        pool.submit(withdrawer);
+
+        Future<BigDecimal> finalBal = pool.submit(balanceCheck);
+
+        pool.shutdown();
+        pool.awaitTermination(5, TimeUnit.SECONDS);
+
+        System.out.println("✅ Final Balance: ₹" + finalBal.get());
+    }
+
+    private static void log(String op, BigDecimal bal) {
+        System.out.println(Thread.currentThread().getName() + " " + op + " → Balance: ₹" + bal);
+    }
+    private static void sleep(long ms) { try { Thread.sleep(ms); } catch (InterruptedException ignored) {} }
+}
+```
+
+---
+
+## 10) Quick practice (do these now)
+
+1. **Switch** from `synchronized` to `ReentrantLock` with `tryLock(100ms)` in `withdraw()`. Log a friendly “System busy, please retry.”
+2. Add **metrics** using `LongAdder` for `totalDeposits` and `totalWithdrawals`.
+3. Implement a **transfer** between two accounts with **global lock ordering** to avoid deadlock.
+4. Add a **read-heavy** `getStatement()` using `ReadWriteLock` (fake returning a string or snapshot).
+
+---
