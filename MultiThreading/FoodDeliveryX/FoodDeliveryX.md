@@ -1,13 +1,3 @@
-That’s an *excellent instinct*, Tushar 👏 — exactly how great architects think.
-Before we dive into the **Executor Framework**, we’ll pause and **clear all your confusion** about:
-
-> “Why we use which concurrency tool, and when — in simple, practical, everyday terms.”
-
-We’ll do this by building a **new, super-explainable mini project** that visually and conceptually connects all pieces:
-`synchronized`, `volatile`, `ReentrantLock`, `ReadWriteLock`, and `Atomic variables`.
-
----
-
 ## 🧩 Mini Project: **FoodDeliveryX – Real-Time Order Processing System**
 
 ### 🎯 Objective
@@ -211,16 +201,423 @@ This project teaches *when and why* each tool fits:
 
 ---
 
-## ✅ Next Step
+# Lesson 3 — Executor Framework (FoodDeliveryX at scale)
 
-Once this project’s flow and purpose of each mechanism are crystal clear,
-we’ll move to **Lesson 3: Executor Framework** — where we’ll turn this FoodDeliveryX simulation into a **scalable concurrent system** using:
+## What you’ll master (enterprise focus)
 
-* ThreadPool tuning (`corePoolSize`, `queue`, `rejection policy`)
-* Task submission strategies
-* Backpressure & graceful shutdown
+* Choosing a **thread pool type** (and why)
+* **Bounded queues** & **backpressure**
+* **Rejection policies** (and safe fallbacks)
+* **Precise timing**: queue wait vs execution time
+* **Custom ThreadFactory** (naming, daemon, priority)
+* **Graceful shutdown** and **saturation metrics**
+* Scheduled retries for transient failures
 
 ---
 
-Would you like me to **extend this same FoodDeliveryX project** in Lesson 3 (adding Executor tuning, async retries, and task queue management)?
-That way, you’ll see how thread pools are *really* used in enterprise-grade systems.
+## 0) When to use an Executor (vs raw threads)
+
+* **Raw Thread**: one-off, low volume, no control, hard to tune.
+* **Executor**: pooled workers, bounded queue, metrics, controlled shutdown, predictable latency.
+
+> Architect rule: For servers and services, **always** use a tuned `ThreadPoolExecutor` with a **bounded** queue and explicit **rejection handling**.
+
+---
+
+## 1) Design for FoodDeliveryX
+
+We’ll treat **“deliver this order”** as a *task* going into a **bounded queue**:
+
+* If too many orders arrive → **backpressure** kicks in (reject/block/defer).
+* We will measure:
+
+    * **Enqueue time (wait in queue)**
+    * **Execution time (run on a worker)**
+    * **Total latency (enqueue + execution)**
+
+---
+
+## 2) Code — Production-style Executor with Metrics
+
+### 2.1 Utilities (metrics + timers)
+
+```java
+package com.fooddelivery.concurrent.metrics;
+
+import java.util.concurrent.atomic.LongAdder;
+
+public class Metrics {
+    public final LongAdder submitted = new LongAdder();
+    public final LongAdder accepted  = new LongAdder();
+    public final LongAdder rejected  = new LongAdder();
+    public final LongAdder completed = new LongAdder();
+
+    public final LongAdder totalQueueWaitMs = new LongAdder();
+    public final LongAdder totalExecMs      = new LongAdder();
+
+    public void printSnapshot() {
+        long sub = submitted.sum();
+        long acc = accepted.sum();
+        long rej = rejected.sum();
+        long cmp = completed.sum();
+        long qMs = totalQueueWaitMs.sum();
+        long eMs = totalExecMs.sum();
+
+        System.out.printf(
+            "📊 Metrics => submitted=%d, accepted=%d, rejected=%d, completed=%d, " +
+            "avgQueueWait=%.2f ms, avgExec=%.2f ms%n",
+            sub, acc, rej, cmp,
+            (cmp == 0 ? 0.0 : (double) qMs / cmp),
+            (cmp == 0 ? 0.0 : (double) eMs / cmp)
+        );
+    }
+}
+```
+
+### 2.2 Task wrapper (captures enqueue/exec timing)
+
+```java
+package com.fooddelivery.concurrent.exec;
+
+import com.fooddelivery.concurrent.metrics.Metrics;
+
+public class TimedTask implements Runnable {
+    private final Runnable delegate;
+    private final Metrics metrics;
+    private final long enqueuedAtMs;
+
+    public TimedTask(Runnable delegate, Metrics metrics) {
+        this.delegate = delegate;
+        this.metrics = metrics;
+        this.enqueuedAtMs = System.currentTimeMillis();
+    }
+
+    @Override
+    public void run() {
+        long startExec = System.currentTimeMillis();
+        long queueWait = startExec - enqueuedAtMs;
+        metrics.totalQueueWaitMs.add(queueWait);
+
+        try {
+            delegate.run();
+        } finally {
+            long execMs = System.currentTimeMillis() - startExec;
+            metrics.totalExecMs.add(execMs);
+            metrics.completed.increment();
+        }
+    }
+}
+```
+
+### 2.3 Custom ThreadFactory (naming + daemon)
+
+```java
+package com.fooddelivery.concurrent.exec;
+
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.atomic.AtomicInteger;
+
+public class NamedThreadFactory implements ThreadFactory {
+    private final String base;
+    private final AtomicInteger seq = new AtomicInteger(1);
+    private final boolean daemon;
+
+    public NamedThreadFactory(String base, boolean daemon) {
+        this.base = base;
+        this.daemon = daemon;
+    }
+
+    @Override
+    public Thread newThread(Runnable r) {
+        Thread t = new Thread(r, base + "-" + seq.getAndIncrement());
+        t.setDaemon(daemon);
+        // t.setPriority(Thread.NORM_PRIORITY); // adjust if needed
+        return t;
+    }
+}
+```
+
+### 2.4 Rejection policies: what and why
+
+* **AbortPolicy** (default): throws `RejectedExecutionException`. Good to **fail fast**.
+* **CallerRunsPolicy**: run on the caller’s thread, slowing producers = **natural backpressure**.
+* **DiscardPolicy**: drop silently (use sparingly).
+* **DiscardOldestPolicy**: drop oldest queued job (time-critical systems).
+
+We’ll implement a **hybrid**: prefer `CallerRuns` (backpressure), but **count** it as a rejection for visibility.
+
+```java
+package com.fooddelivery.concurrent.exec;
+
+import com.fooddelivery.concurrent.metrics.Metrics;
+import java.util.concurrent.RejectedExecutionHandler;
+import java.util.concurrent.ThreadPoolExecutor;
+
+public class BackpressureRejectHandler implements RejectedExecutionHandler {
+    private final Metrics metrics;
+
+    public BackpressureRejectHandler(Metrics metrics) {
+        this.metrics = metrics;
+    }
+
+    @Override
+    public void rejectedExecution(Runnable r, ThreadPoolExecutor executor) {
+        metrics.rejected.increment();
+        // Natural backpressure: run in caller’s thread when pool is saturated
+        if (!executor.isShutdown()) {
+            r.run();
+        }
+    }
+}
+```
+
+### 2.5 Build the ThreadPoolExecutor (bounded queue)
+
+```java
+package com.fooddelivery.concurrent;
+
+import com.fooddelivery.concurrent.exec.*;
+import com.fooddelivery.concurrent.metrics.Metrics;
+
+import java.util.concurrent.*;
+
+public class FoodDeliveryExecutorFactory {
+
+    public static ThreadPoolExecutor buildDeliveryPool(Metrics metrics) {
+        int cores = Math.max(2, Runtime.getRuntime().availableProcessors() / 2);
+        int max   = Math.max(cores * 2, cores + 2); // safe headroom
+        int keepAliveSec = 30;
+
+        // Bounded queue is CRITICAL to avoid unbounded memory growth
+        BlockingQueue<Runnable> queue = new ArrayBlockingQueue<>(50);
+
+        ThreadPoolExecutor tpe = new ThreadPoolExecutor(
+            cores,
+            max,
+            keepAliveSec, TimeUnit.SECONDS,
+            queue,
+            new NamedThreadFactory("deliverer", false),
+            new BackpressureRejectHandler(metrics)
+        );
+        tpe.allowCoreThreadTimeOut(false); // keep cores warm
+        return tpe;
+    }
+}
+```
+
+---
+
+## 3) Integrate with FoodDeliveryX (end-to-end)
+
+### 3.1 Delivery task (with occasional transient failures)
+
+```java
+package com.fooddelivery.concurrent.tasks;
+
+import java.util.concurrent.ThreadLocalRandom;
+
+public class DeliverOrderTask implements Runnable {
+    private final String orderId;
+
+    public DeliverOrderTask(String orderId) {
+        this.orderId = orderId;
+    }
+
+    @Override
+    public void run() {
+        // Simulate variable work
+        try {
+            Thread.sleep(ThreadLocalRandom.current().nextInt(100, 450));
+            // Simulate 10% transient failure
+            if (ThreadLocalRandom.current().nextInt(10) == 0) {
+                throw new RuntimeException("Transient delivery failure for " + orderId);
+            }
+            System.out.println(Thread.currentThread().getName() + " delivered " + orderId);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+        }
+    }
+}
+```
+
+### 3.2 Scheduled retries for transient failures
+
+```java
+package com.fooddelivery.concurrent.exec;
+
+import com.fooddelivery.concurrent.metrics.Metrics;
+
+import java.util.concurrent.*;
+
+public class RetryScheduler {
+    private final ScheduledExecutorService retryExec =
+        Executors.newScheduledThreadPool(1, new NamedThreadFactory("retry", true));
+    private final Metrics metrics;
+
+    public RetryScheduler(Metrics metrics) {
+        this.metrics = metrics;
+    }
+
+    public void scheduleRetry(Runnable task, long delayMs) {
+        retryExec.schedule(task, delayMs, TimeUnit.MILLISECONDS);
+    }
+
+    public void shutdown() {
+        retryExec.shutdown();
+    }
+}
+```
+
+### 3.3 Simulator (producer → bounded executor → metrics → retries)
+
+```java
+package com.fooddelivery.concurrent;
+
+import com.fooddelivery.concurrent.exec.TimedTask;
+import com.fooddelivery.concurrent.metrics.Metrics;
+import com.fooddelivery.concurrent.tasks.DeliverOrderTask;
+
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
+
+public class FoodDeliveryX_ExecutorDemo {
+
+    public static void main(String[] args) throws InterruptedException {
+        long programStart = System.nanoTime();
+
+        Metrics metrics = new Metrics();
+        ThreadPoolExecutor deliveryPool = FoodDeliveryExecutorFactory.buildDeliveryPool(metrics);
+
+        ScheduledExecutorService retryPool =
+            Executors.newScheduledThreadPool(1, r -> new Thread(r, "retry-1"));
+
+        AtomicInteger orderSeq = new AtomicInteger(1);
+
+        // Producer: submit bursts of orders
+        Runnable producer = () -> {
+            for (int i = 0; i < 80; i++) {
+                String orderId = "ORD-" + orderSeq.getAndIncrement();
+                metrics.submitted.increment();
+
+                Runnable core = () -> {
+                    try {
+                        new DeliverOrderTask(orderId).run();
+                    } catch (RuntimeException ex) {
+                        System.out.println("⚠️  " + ex.getMessage() + " -> retry in 500ms");
+                        // schedule retry (1 attempt for demo)
+                        retryPool.schedule(() -> {
+                            try {
+                                new DeliverOrderTask(orderId + "-retry").run();
+                            } catch (RuntimeException ex2) {
+                                System.out.println("❌ permanent failure: " + ex2.getMessage());
+                            }
+                        }, 500, TimeUnit.MILLISECONDS);
+                    }
+                };
+
+                Runnable timed = new TimedTask(core, metrics);
+
+                try {
+                    deliveryPool.execute(timed);
+                    metrics.accepted.increment();
+                } catch (RejectedExecutionException rex) {
+                    // Should be rare since our handler calls r.run() (backpressure on caller)
+                    metrics.rejected.increment();
+                    timed.run(); // fallback in caller (keeps system responsive)
+                }
+
+                // Simulate spiky input
+                sleep(20);
+            }
+        };
+
+        // Run producer on caller thread for clarity (could be its own thread)
+        producer.run();
+
+        // Graceful shutdown
+        deliveryPool.shutdown();
+        retryPool.shutdown();
+
+        // Await termination with timeout, then force if needed
+        if (!deliveryPool.awaitTermination(10, TimeUnit.SECONDS)) {
+            deliveryPool.shutdownNow();
+        }
+        if (!retryPool.awaitTermination(5, TimeUnit.SECONDS)) {
+            retryPool.shutdownNow();
+        }
+
+        // Print metrics
+        metrics.printSnapshot();
+
+        double totalMs = (System.nanoTime() - programStart) / 1_000_000.0;
+        System.out.printf("⏰ Total Program Time: %.2f ms (≈ %.2f s)%n", totalMs, totalMs/1000.0);
+        System.out.printf("🧵 Pool Stats => poolSize=%d, active=%d, queued=%d, completed=%d%n",
+                deliveryPool.getPoolSize(),
+                deliveryPool.getActiveCount(),
+                deliveryPool.getQueue().size(),
+                deliveryPool.getCompletedTaskCount());
+
+        System.out.println("✅ Done.");
+    }
+
+    private static void sleep(long ms) { try { Thread.sleep(ms); } catch (InterruptedException ignored) {} }
+}
+```
+
+---
+
+## 4) Why these choices (plain language)
+
+* **Bounded queue (`ArrayBlockingQueue`)**: prevents memory blow-up under spikes.
+* **Core vs Max threads**: cores handle steady load; bursts can stretch to max temporarily.
+* **`BackpressureRejectHandler`**: when saturated, the **producer slows down** (runs task itself) — protects the system.
+* **TimedTask**: separates **queue wait** and **execution time** — shows where bottlenecks are.
+* **Metrics**: lets you **tune** pool size and queue length with real data.
+* **Scheduled retries**: isolate transient failures without crashing the pool.
+* **Graceful shutdown**: avoid lost tasks or hanging threads.
+
+---
+
+## 5) Tuning cheatsheet (how to choose numbers)
+
+* Start with:
+
+    * `corePoolSize = CPUs` (or `CPUs / 2` if tasks are CPU-heavy; `CPUs * 2` if I/O-heavy)
+    * `maxPoolSize = core * 2` (or core + 2 for conservative growth)
+    * `queue capacity = 5x core` (adjust based on latency SLO)
+* Watch metrics:
+
+    * **High avgQueueWait** → increase cores or shrink queue (or add more instances).
+    * **High avgExec** → optimize task logic or add resources.
+    * **Many rejections** → producer too fast; throttle upstream or scale horizontally.
+
+---
+
+## 6) Graceful shutdown recipe (copy-paste ready)
+
+```java
+executor.shutdown();
+if (!executor.awaitTermination(30, TimeUnit.SECONDS)) {
+    executor.shutdownNow();
+}
+```
+
+> Never forget: leaving pools running causes tests to hang and services to refuse redeploy cleanly.
+
+---
+
+## 7) Quick exercises (10–15 min)
+
+1. **Change queue** to `LinkedBlockingQueue(50)`. Compare avgQueueWait vs `ArrayBlockingQueue`.
+2. Set rejection to **AbortPolicy** and catch `RejectedExecutionException` → decide whether to **drop** or **retry later**.
+3. Make tasks *I/O-heavy* by increasing `Thread.sleep(300–1000)` and observe pool behavior; increase core size to see the impact.
+4. Add a periodic metrics logger (`ScheduledExecutorService`) every second.
+5. Try **DiscardOldestPolicy** and see how it affects latency tail.
+
+---
+
+## ✅ Progress tracker
+
+* Lesson 1: Thread basics — ✅
+* Lesson 2: Synchronization & thread safety — ✅
+* **Lesson 3: Executor Framework — ✅ core + metrics + backpressure**
