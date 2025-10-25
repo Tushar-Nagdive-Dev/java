@@ -898,3 +898,239 @@ CompletableFuture<Integer> traffic =
 5. Chain a `.thenAcceptAsync()` to push the result into a Kafka topic mock (simulate event propagation).
 
 ---
+# Lesson 5 — Parallel Streams & Reactive Patterns
+
+*(with Reactor & Project Loom Introduction)*
+
+---
+
+## 🧭 Learning Goals
+
+By the end of this lesson, you’ll clearly understand:
+
+* When to use **Parallel Streams** vs **CompletableFuture**
+* How to apply **functional concurrency** with minimal boilerplate
+* What **Reactive Programming** is, and how frameworks like **Reactor** or **RxJava** implement it
+* How **Project Loom** changes the game for concurrent architectures (Java 21+)
+
+---
+
+## 🍱 Scenario — FoodDeliveryX Analytics System
+
+Let’s say you now have **thousands of completed deliveries**, and you need to compute:
+
+1. Average delivery time
+2. Most delayed restaurant
+3. Top performing delivery partner
+
+You’ll explore **three approaches** to compute these analytics concurrently:
+
+1. Sequential Stream (baseline)
+2. Parallel Stream
+3. CompletableFuture Pipeline
+4. Reactive Flux (intro concept)
+
+---
+
+## 1️⃣ Sequential Stream (baseline)
+
+```java
+List<Integer> deliveryTimes = List.of(25, 28, 32, 21, 30, 27, 33, 26);
+
+long start = System.currentTimeMillis();
+double avg = deliveryTimes.stream()
+    .mapToInt(Integer::intValue)
+    .average()
+    .orElse(0);
+long end = System.currentTimeMillis();
+
+System.out.printf("⏱️ Sequential avg = %.2f mins (took %d ms)%n", avg, (end - start));
+```
+
+✅ Simple, readable.
+❌ Processes items **one by one**, using a single thread.
+
+---
+
+## 2️⃣ Parallel Stream
+
+```java
+long start = System.currentTimeMillis();
+double avg = deliveryTimes.parallelStream()
+    .mapToInt(Integer::intValue)
+    .average()
+    .orElse(0);
+long end = System.currentTimeMillis();
+
+System.out.printf("⚡ Parallel avg = %.2f mins (took %d ms)%n", avg, (end - start));
+```
+
+✅ Runs across multiple threads automatically (common ForkJoinPool).
+✅ Great for **CPU-bound, independent operations**.
+❌ Dangerous for **I/O-heavy** or **shared-state** tasks (no order guarantee).
+
+---
+
+### 🧠 How it works under the hood
+
+* Java splits the collection into chunks.
+* Each chunk runs in a **ForkJoinPool** worker thread.
+* Results are merged at the end.
+
+```java
+System.out.println("Threads used:");
+deliveryTimes.parallelStream()
+    .peek(i -> System.out.println(Thread.currentThread().getName() + " processing " + i))
+    .mapToInt(Integer::intValue)
+    .average()
+    .orElse(0);
+```
+
+---
+
+## 3️⃣ Parallel Stream vs CompletableFuture
+
+| Feature         | Parallel Stream          | CompletableFuture                      |
+| --------------- | ------------------------ | -------------------------------------- |
+| Style           | Declarative (functional) | Imperative / pipeline                  |
+| Control         | Minimal (auto splits)    | Full control (executor, retries, etc.) |
+| Best for        | CPU-bound data ops       | I/O-bound async workflows              |
+| Custom Executor | ❌ Hard to set            | ✅ Easy                                 |
+| Error handling  | Primitive                | Robust (`exceptionally`, `handle`)     |
+
+✅ **Architect’s rule**
+
+* Use **Parallel Stream** for *pure data transformations* (e.g., analytics, image processing).
+* Use **CompletableFuture** for *service orchestration* or *API calls*.
+
+---
+
+## 4️⃣ Real Example — Compute Delivery Stats Concurrently
+
+```java
+import java.util.*;
+import java.util.concurrent.ThreadLocalRandom;
+
+public class DeliveryStats {
+    public static void main(String[] args) {
+        List<DeliveryRecord> deliveries = new ArrayList<>();
+        for (int i = 0; i < 1000; i++) {
+            deliveries.add(new DeliveryRecord("R" + (i % 10), "P" + (i % 5),
+                ThreadLocalRandom.current().nextInt(20, 50)));
+        }
+
+        long start = System.currentTimeMillis();
+        Map<String, Double> avgByRestaurant = deliveries.parallelStream()
+            .collect(Collectors.groupingBy(
+                DeliveryRecord::restaurant,
+                Collectors.averagingInt(DeliveryRecord::time)
+            ));
+        long end = System.currentTimeMillis();
+
+        System.out.println("📊 Avg time by restaurant (parallel): " + avgByRestaurant);
+        System.out.println("⏱️ Took: " + (end - start) + " ms");
+    }
+
+    record DeliveryRecord(String restaurant, String partner, int time) {}
+}
+```
+
+✅ **Auto-splits and merges** results across threads — simple but powerful.
+
+---
+
+## 5️⃣ Introduction to Reactive Programming (Project Reactor / RxJava)
+
+### 🔍 Why Reactive?
+
+Parallel Streams or Futures work fine until:
+
+* You need *continuous, event-driven* data (not finite lists)
+* You want *backpressure* (control flow between producers and consumers)
+* You integrate *streaming APIs or websockets*
+
+**Reactive Streams** handle asynchronous *data flows* with demand control.
+
+---
+
+### Simple example using Reactor (conceptual)
+
+```java
+import reactor.core.publisher.Flux;
+
+Flux.just("R1", "R2", "R3")
+    .map(r -> r + " → preparing")
+    .delayElements(Duration.ofMillis(500))
+    .subscribe(
+        item -> System.out.println(Thread.currentThread().getName() + " => " + item),
+        err -> System.out.println("Error: " + err),
+        () -> System.out.println("✅ Stream complete")
+    );
+```
+
+✅ Non-blocking
+✅ Event-driven
+✅ Scales to thousands of live events
+
+---
+
+## 6️⃣ Project Loom (Java 21+)
+
+### 🔍 The problem:
+
+Traditional threads are **heavy** (≈1 MB stack each). Managing thousands = expensive.
+
+### 💡 Project Loom’s solution:
+
+Introduces **virtual threads** — ultra-lightweight, scheduled by JVM itself.
+
+```java
+try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+    IntStream.range(0, 10).forEach(i ->
+        executor.submit(() -> {
+            System.out.println(Thread.currentThread());
+            Thread.sleep(200);
+            return i;
+        })
+    );
+}
+```
+
+✅ Each task gets its own **virtual thread**
+✅ No need for complex thread pools
+✅ Perfect for **I/O-bound, concurrent microservices**
+✅ Combine with **structured concurrency** → easier lifecycle management
+
+---
+
+## 7️⃣ Summary — Concurrency Choices for Architects
+
+| Pattern             | Best For              | Pros                       | Avoid When              |
+| ------------------- | --------------------- | -------------------------- | ----------------------- |
+| `Thread`            | Tiny standalone jobs  | Simple                     | Not scalable            |
+| `ExecutorService`   | Managed pools         | Reliable, tunable          | Complex chaining        |
+| `CompletableFuture` | Async orchestration   | Functional, non-blocking   | Heavy nesting           |
+| `ParallelStream`    | CPU data ops          | Clean functional syntax    | Shared state, I/O       |
+| `Reactor/Rx`        | Streaming async flows | Event-driven, backpressure | Learning curve          |
+| `Project Loom`      | Massive concurrency   | Simplicity, light threads  | Pre-Java21 environments |
+
+---
+
+## 🧠 Architect’s Takeaway
+
+Think of concurrency as *levels of abstraction*:
+
+1. **Threads** → “Do this simultaneously.”
+2. **Executors** → “Manage these workers efficiently.”
+3. **CompletableFutures** → “Run tasks asynchronously and combine results.”
+4. **Parallel Streams** → “Process large data sets concurrently.”
+5. **Reactive Streams** → “Respond to ongoing data flows dynamically.”
+6. **Virtual Threads (Loom)** → “Make concurrency cheap and natural.”
+
+---
+
+## 💪 Exercise
+
+1. Create a list of 100 restaurants → compute top 5 slowest ones using `parallelStream()`.
+2. Wrap each computation in a `CompletableFuture` and compare total time vs. sequential.
+3. If you have Java 21 → try replacing your `ExecutorService` with **virtual threads** and measure difference.
