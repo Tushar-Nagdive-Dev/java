@@ -694,3 +694,207 @@ public class BankXApp {
 4. Add a **read-heavy** `getStatement()` using `ReadWriteLock` (fake returning a string or snapshot).
 
 ---
+
+## 🧭 Goal
+
+You’ll learn to:
+
+* Compose dependent and parallel async tasks (`thenApply`, `thenCombine`, `allOf`)
+* Handle exceptions gracefully
+* Add timeouts and fallbacks
+* Continue using your existing timing/metrics mindset
+* Understand when **CompletableFuture** beats thread pools directly
+
+---
+
+## 1️⃣ Why CompletableFuture?
+
+`ExecutorService` gives control of *threads*, but you still write blocking code (`future.get()`).
+`CompletableFuture` is:
+
+* **Non-blocking** → tasks complete independently; combine results later
+* **Functional-style composition** → chain transformations & combine results
+* **Lightweight** → uses common ForkJoinPool (or your own)
+
+> Think of it as a **promise**: *“When this task finishes, run these follow-ups.”*
+
+---
+
+## 2️⃣ FoodDeliveryX Scenario
+
+When a customer orders food:
+
+1. We fetch **restaurant prep time** (I/O)
+2. We fetch **traffic ETA** (API)
+3. We fetch **delivery-partner availability** (DB)
+4. When all are ready → compute **estimated delivery time (EDT)**
+5. Log the total async duration
+
+---
+
+## 3️⃣ Implementation — Async Composition Example
+
+```java
+package com.fooddelivery.concurrent.async;
+
+import java.util.concurrent.*;
+import java.util.function.Supplier;
+
+public class DeliveryEstimateService {
+
+    private static final ExecutorService exec =
+        Executors.newFixedThreadPool(4, r -> new Thread(r, "cf-" + r.hashCode()));
+
+    public static void main(String[] args) throws Exception {
+        long start = System.currentTimeMillis();
+
+        CompletableFuture<Integer> prepTime =
+            CompletableFuture.supplyAsync(fetchPrepTime(), exec);
+
+        CompletableFuture<Integer> trafficTime =
+            CompletableFuture.supplyAsync(fetchTrafficETA(), exec);
+
+        CompletableFuture<Integer> partnerAvailability =
+            CompletableFuture.supplyAsync(fetchPartnerAvailability(), exec);
+
+        // Combine all results when ready
+        CompletableFuture<Integer> totalETA = prepTime
+            .thenCombine(trafficTime, Integer::sum)
+            .thenCombine(partnerAvailability, Integer::sum)
+            .orTimeout(2, TimeUnit.SECONDS) // safeguard
+            .exceptionally(ex -> {
+                System.out.println("⚠️  Timeout or failure: " + ex.getMessage());
+                return 999; // fallback ETA
+            });
+
+        System.out.println("🕓 Doing other work while async tasks run...");
+        System.out.println("📦 Estimated Delivery Time: " + totalETA.get() + " mins");
+
+        System.out.println("✅ Completed in " + (System.currentTimeMillis() - start) + " ms");
+        exec.shutdown();
+    }
+
+    // Simulated async suppliers
+    private static Supplier<Integer> fetchPrepTime() {
+        return () -> simulate("Restaurant prep", 500, 900);
+    }
+    private static Supplier<Integer> fetchTrafficETA() {
+        return () -> simulate("Traffic API", 300, 800);
+    }
+    private static Supplier<Integer> fetchPartnerAvailability() {
+        return () -> simulate("Partner DB", 400, 700);
+    }
+
+    private static int simulate(String name, int min, int max) {
+        int val = ThreadLocalRandom.current().nextInt(10, 30);
+        int sleep = ThreadLocalRandom.current().nextInt(min, max);
+        try {
+            Thread.sleep(sleep);
+            System.out.printf("✅ %s fetched in %d ms → %d mins%n", name, sleep, val);
+        } catch (InterruptedException ignored) {}
+        return val;
+    }
+}
+```
+
+---
+
+### 🧩 Output Example
+
+```
+🕓 Doing other work while async tasks run...
+✅ Restaurant prep fetched in 812 ms → 18 mins
+✅ Partner DB fetched in 691 ms → 11 mins
+✅ Traffic API fetched in 512 ms → 15 mins
+📦 Estimated Delivery Time: 44 mins
+✅ Completed in 843 ms
+```
+
+**Notice:**
+Total elapsed ≈ largest single call (non-blocking), not the sum of all. That’s the power of parallel async composition.
+
+---
+
+## 4️⃣ Key APIs (with plain-English meaning)
+
+| Method            | What it does                 | Real-world analogy                                 |
+| ----------------- | ---------------------------- | -------------------------------------------------- |
+| `supplyAsync()`   | Start async task with return | “Ask three teams for their reports”                |
+| `thenApply()`     | Transform result             | “Convert minutes to ETA text”                      |
+| `thenCombine()`   | Merge two results            | “Add prep + traffic time”                          |
+| `allOf()`         | Wait for *many* futures      | “Wait for all departments before announcing total” |
+| `anyOf()`         | Whichever finishes first     | “Pick the fastest courier quote”                   |
+| `exceptionally()` | Handle error gracefully      | “If data missing, use default”                     |
+| `orTimeout()`     | Cancel slow tasks            | “Ignore delayed API after 2 s”                     |
+
+---
+
+## 5️⃣ Adding Time Measurement per Stage
+
+You can decorate each async step:
+
+```java
+CompletableFuture<Integer> prepTime =
+    CompletableFuture.supplyAsync(time("Prep", fetchPrepTime()), exec);
+
+private static <T> Supplier<T> time(String label, Supplier<T> task) {
+    return () -> {
+        long s = System.currentTimeMillis();
+        T res = task.get();
+        long dur = System.currentTimeMillis() - s;
+        System.out.printf("⏱️ %s took %d ms%n", label, dur);
+        return res;
+    };
+}
+```
+
+Now each stage reports its own duration.
+
+---
+
+## 6️⃣ Advanced Pattern — Async Retry
+
+For transient network failures:
+
+```java
+private static <T> CompletableFuture<T> withRetry(Supplier<T> supplier, int maxRetries) {
+    return CompletableFuture.supplyAsync(supplier)
+        .handleAsync((res, ex) -> {
+            if (ex == null) return CompletableFuture.completedFuture(res);
+            if (maxRetries > 0) {
+                System.out.println("🔁 retrying after error: " + ex.getMessage());
+                return withRetry(supplier, maxRetries - 1);
+            }
+            throw new CompletionException(ex);
+        }).thenCompose(cf -> cf);
+}
+```
+
+Use:
+
+```java
+CompletableFuture<Integer> traffic =
+    withRetry(fetchTrafficETA(), 2);
+```
+
+---
+
+## 7️⃣ Architect-Level Takeaways
+
+* ✅ **Shift from threads to flows** — think in *pipelines* of async stages.
+* ✅ **Parallelism by design** — the slowest component defines total latency.
+* ✅ **Functional composition** → cleaner than nested futures or blocking calls.
+* ✅ **Timeouts + fallbacks** protect user experience.
+* ✅ **Metrics** integrate easily (record stage durations).
+
+---
+
+## 8️⃣ Exercises
+
+1. Add a **restaurant rating API** and combine it into the final ETA message.
+2. Introduce a **slow API** and confirm timeout/fallback triggers.
+3. Log **thread names** per stage to see ForkJoinPool behavior.
+4. Swap the executor with your **deliveryPool** from Lesson 3 for unified thread management.
+5. Chain a `.thenAcceptAsync()` to push the result into a Kafka topic mock (simulate event propagation).
+
+---

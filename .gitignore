@@ -43,3 +43,6 @@ module-JCF/SmartMart/build
 # Ignore MultiThreading not required
 MultiThreading/FoodDeliveryX/.gradle
 MultiThreading/FoodDeliveryX/gradle
+MultiThreading/FoodDeliveryX/gradlew.bat
+MultiThreading/FoodDeliveryX/build
+MultiThreading/FoodDeliveryX/gradlew
