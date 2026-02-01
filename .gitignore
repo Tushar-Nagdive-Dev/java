@@ -46,3 +46,6 @@ MultiThreading/FoodDeliveryX/gradle
 MultiThreading/FoodDeliveryX/gradlew.bat
 MultiThreading/FoodDeliveryX/build
 MultiThreading/FoodDeliveryX/gradlew
+
+build
+.gradle
