@@ -6,15 +6,48 @@ import java.io.File;
 import java.io.IOException;
 
 public class ImageProcessing {
-    public static final String SOURCE_FILE = "./resources/many-flowers.jpg";
+    public static final String SOURCE_FILE = "/many-flowers.jpg";
     public static final String DESTINATION_FILE = "./out/many-flowers.jpg";
 
     public static void main(String[] args) throws IOException {
-        BufferedImage originalImage = ImageIO.read(new File(SOURCE_FILE));
+        // 1. Try loading input from resources first (Best for Gradle/IDE)
+        java.net.URL resourceUrl = ImageProcessing.class.getResource("/many-flowers.jpg");
+        BufferedImage originalImage;
+
+        if (resourceUrl != null) {
+            originalImage = ImageIO.read(resourceUrl);
+        } else {
+            // 2. Fallback to file system if resource not found
+            File f = new File(SOURCE_FILE);
+            if (!f.exists()) {
+                System.err.println("Error: File not found at " + f.getAbsolutePath());
+                System.err.println("Please ensure 'many-flowers.jpg' is in the project root or src/main/resources.");
+                return;
+            }
+            originalImage = ImageIO.read(f);
+        }
+
         BufferedImage bufferedImage = new BufferedImage(originalImage.getWidth(), originalImage.getHeight(), BufferedImage.TYPE_INT_RGB);
+
+        // 3. Process the image
+        reColorSingleThread(originalImage, bufferedImage);
+
+        // 4. Write output (FIXED: Create the directory first)
+        File output = new File(DESTINATION_FILE);
+
+        // Ensure the "out" folder exists, otherwise ImageIO fails
+        File parentDir = output.getParentFile();
+        if (parentDir != null && !parentDir.exists()) {
+            parentDir.mkdirs();
+        }
+
+        ImageIO.write(bufferedImage, "jpg", output);
+        System.out.println("Success! Image saved to: " + output.getAbsolutePath());
     }
 
-
+    public static void reColorSingleThread(BufferedImage originalImage, BufferedImage bufferedImage) {
+        recolorImage(originalImage, bufferedImage, 0, 0, originalImage.getWidth(), originalImage.getHeight());
+    }
 
     public static void recolorImage(BufferedImage originalImage, BufferedImage bufferedImage, int leftCorner, int topCorner, int width, int height) {
         for(int x = leftCorner; x < leftCorner + width && x < originalImage.getWidth(); x++) {
@@ -37,8 +70,8 @@ public class ImageProcessing {
 
         if(isShadowOfGrey(red, green, blue)){
             newRed = Math.min(255, red + 10);
-            newGreen = Math.min(0, green - 80);
-            newBlue = Math.min(0, blue - 20);
+            newGreen = Math.max(0, green - 80);
+            newBlue = Math.max(0, blue - 20);
         } else {
             newRed = red;
             newGreen = green;
